@@ -22,6 +22,9 @@
     .PARAMETER Version 
             Version will hold the SQL Server version you wish to install. The variable will support autocomplete
 
+    .PARAMETER InstanceName
+            InstanceName will hold the name of the instance you are installing
+
     .PARAMETER Edition 
             Edition will hold the different basic editions of SQL Server: Express, Standard, Enterprise and Developer. The variable will support autocomplete
 
@@ -88,6 +91,7 @@
         [parameter(Mandatory)]
         [ValidateSet("2008", "2008R2", "2012", "2014", "2016", "2017", "2019")]
         [string]$Version, 
+        [string]$InstanceName,
         [ValidateSet("Express", "Standard", "Enterprise", "Developer")]
         [string]$Edition = "Express",
         [ValidateSet("AllFeaturesWithDefaults", "Custom")]
@@ -114,7 +118,14 @@
     }
 
     if($null -eq $Role -or $Role -eq "AllFeaturesWithDefaults"){
-        #Reminder to check which paramters should be set to run a default.
+        #Reminder to check which parameters should be set to run as default.
+        $StatsAndMl = ''
+        $Authentication = "Windows"
+        #Diskvolumes will be set based on volume names or the default C-drive when the name can't be found
+        #Installation folder will be searched for
+        $PerformVolumeMaintenance = 'No'
+        $SaveFile = 'No'
+
     }
 
     # Check if the edition of SQL Server supports Python and R. Introduced in SQL 2016, it should not be allowed in earlier installations.
@@ -130,13 +141,34 @@
 
     Copy-Item "$script:PSModuleRoot\bin\installtemplate\$version\$Edition\Configuration$version.ini" -Destination "$script:PSModuleRoot\bin\installtemplate\"
 
+    # If the name of the Instance isn't specified, the default names will be applied
+    if($null -eq $InstanceName -or $InstanceName -eq '')
+    {
+        if($Edition -eq 'Express'){
+            $InstanceName = 'SQLExpress'
+        }
+        else {
+            $InstanceName = 'MSSQLSERVER'
+        }
+        
+
+    }
+    
     # Get the content of the copied ini file to use. 
 
     $configini = Get-Content "$script:PSModuleRoot\bin\installtemplate\Configuration$version.ini"
 
     # Let the user set the Service Account for SQL Server. This does imply that the user has been created.
 
-    $SqlServerAccount = Get-CimInstance -ClassName Win32_UserAccount  | Out-GridView -title 'Please select the Service Account for your Sql Server instance.' -PassThru | Select-Object -ExpandProperty Name
+    $SqlServerAccount = Get-CimInstance -ClassName Win32_UserAccount  | 
+        Out-GridView -title 'Please select the Service Account for your Sql Server instance.' -PassThru | 
+        Select-Object -ExpandProperty Name
+
+    # Let the user select the main Windows or Domain account that will be used as administrator. 
+
+    $SqlServerAdminAccount = Get-CimInstance -ClassName Win32_UserAccount  | 
+        Out-GridView -title 'Please select the Service Account for your Sql Server instance.' -PassThru | 
+        Select-Object -ExpandProperty Name
 
     # If the users selects the mixed mode authentication, ask the user to enter the password for SA.
 
@@ -181,60 +213,57 @@
             Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*Data*'} | 
             Select-Object -ExpandProperty DriveLetter
     }
+
+    if ($null -eq $DataVolume -or $DataVolume -eq '') {
+        $DataVolume = 'C'
+    }
+
     if ($LogVolume -eq $null -or $LogVolume -eq '') {
         $LogVolume = Get-Volume | 
             Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*Log*'} |  
             Select-Object -ExpandProperty DriveLetter
-    }
-    if ($TempVolume -eq $null -or $TempVolume -eq '') {
-        $TempVolume = Get-Volume | 
-            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*TempDB*'} |  
-            Select-Object -ExpandProperty DriveLetter
-    }
-    if ($AppVolume -eq $null -or $AppVolume -eq '') {
-        $AppVolume = Get-Volume | 
-            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*App*'} |  
-            Select-Object -ExpandProperty DriveLetter
-    }
-    if ($BackupVolume -eq $null -or $BackupVolume -eq '') {
-        $BackupVolume = Get-Volume | 
-            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*Backup*'} |  
-            Select-Object -ExpandProperty DriveLetter
-    }
-    #Check the number of cores available on the server. Summed because every processor can contain multiple cores
-    $NumberOfCores = Get-CimInstance -ClassName Win32_processor | Measure-Object NumberOfCores -Sum | Select-Object -ExpandProperty sum
-
-    if ($NumberOfCores -gt 8)
-    { $NumberOfCores = 8 }
-
-    if ($null -eq $DataVolume -or $DataVolume -eq '') {
-        $DataVolume = 'C'
     }
 
     if ($null -eq $LogVolume -or $LogVolume -eq '') {
         $LogVolume = $DataVolume
     }
 
+    if ($TempVolume -eq $null -or $TempVolume -eq '') {
+        $TempVolume = Get-Volume | 
+            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*TempDB*'} |  
+            Select-Object -ExpandProperty DriveLetter
+    }
+
     if ( $null -eq $TempVolume -or $TempVolume -eq '') {
         $TempVolume = $DataVolume
+    }
+
+    if ($AppVolume -eq $null -or $AppVolume -eq '') {
+        $AppVolume = Get-Volume | 
+            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*App*'} |  
+            Select-Object -ExpandProperty DriveLetter
     }
 
     if ( $null -eq $AppVolume -or $AppVolume -eq '') {
         $AppVolume = 'C'
     }
 
+    if ($BackupVolume -eq $null -or $BackupVolume -eq '') {
+        $BackupVolume = Get-Volume | 
+            Where-Object {$_.DriveType -EQ 'Fixed' -and $null -ne $_.DriveLetter -and $_.FileSystemLabel -like '*Backup*'} |  
+            Select-Object -ExpandProperty DriveLetter
+    }
+
     if ( $null -eq $BackupVolume -or $BackupVolume -eq '') {
         $BackupVolume = $DataVolume
     }
-
 
     Write-Message -Level Verbose -Message 'Your datadrive:' $DataVolume
     Write-Message -Level Verbose -Message 'Your logdrive:' $LogVolume
     Write-Message -Level Verbose -Message 'Your TempDB drive:' $TempVolume
     Write-Message -Level Verbose -Message 'Your applicationdrive:' $AppVolume
     Write-Message -Level Verbose -Message 'Your Backup Drive:' $BackupVolume
-    Write-Message -Level Verbose -Message 'Number of cores for your Database:' $NumberOfCores
-
+   
     Write-Message -Level Verbose -Message  'Do you agree on the drives?'
     $AlterDir = Read-Host " ( Y / N )"
 
@@ -305,6 +334,26 @@
         default {Write-Message -Level Verbose -Message "Drives agreed, continuing"; }
     }
 
+    #Check the number of cores available on the server. Summed because every processor can contain multiple cores
+    $NumberOfCores = Get-CimInstance -ClassName Win32_processor | 
+        Measure-Object NumberOfCores -Sum | 
+        Select-Object -ExpandProperty sum
+
+    if ($NumberOfCores -gt 8)
+    { $NumberOfCores = 8 }
+
+    Write-Message -Level Verbose -Message 'Number of cores for your Database:' $NumberOfCores
+
+    #Edit the config file with the parameters and other settings 
+
+    (Get-Content -Path $configini).Replace('INSTANCENAME="SQLEXPRESS"', 'INSTANCENAME="' + $InstanceName + '"') | Out-File $configini
+
+    (Get-Content -Path $configini).Replace('INSTALLSHAREDDIR="C:\Program Files\Microsoft SQL Server"', 'INSTALLSHAREDDIR="' +$AppVolume + ':\Program Files\Microsoft SQL Server"') | Out-File $configini
+
+    (Get-Content -Path $configini).Replace('INSTALLSHAREDWOWDIR="C:\Program Files (x86)\Microsoft SQL Server"', 'INSTALLSHAREDWOWDIR="' + $AppVolume + ':\Program Files (x86)\Microsoft SQL Server"') | Out-File $configini
+    
+    (Get-Content -Path $configini).Replace('INSTANCEDIR="C:\Program Files\Microsoft SQL Server"', 'INSTANCEDIR="' + $AppVolume +':\Program Files\Microsoft SQL Server"') | Out-File $configini
+    
     (Get-Content -Path $configini).Replace('SQLBACKUPDIR="E:\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Backup"', 'SQLBACKUPDIR="' + $BackupVolume + ':\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Backup"') | Out-File $configini
 
     (Get-Content -Path $configini).Replace('SQLUSERDBDIR="E:\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Data"', 'SQLUSERDBDIR="' + $DataVolume + ':\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Data"') | Out-File $configini
@@ -313,8 +362,17 @@
 
     (Get-Content -Path $configini).Replace('SQLUSERDBLOGDIR="E:\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Log"', 'SQLUSERDBLOGDIR="' + $LogVolume + ':\Program Files\Microsoft SQL Server\MSSQL12.AXIANSDB01\MSSQL\Log"') | Out-File $configini
 
-    (Get-Content -Path $configini).Replace('SQLSYSADMINACCOUNTS="WIN-NAJQHOBU8QD\Administrator"', 'SQLSYSADMINACCOUNTS="' + $SqlServerAccount)| Out-File $configini
+    (Get-Content -Path $configini).Replace('SQLSVCACCOUNT="NT Service\MSSQL$SQLEXPRESS"', 'SQLSVCACCOUNT="' + $SqlServerAccount + '"')| Out-File $configini
 
+    (Get-Content -Path $configini).Replace('SQLSYSADMINACCOUNTS="WIN-15ASQ6NAJ98\Reitse Eskens"', 'SQLSYSADMINACCOUNTS="' + $SqlServerAdminAccount + '"')| Out-File $configini
+    
+    If($StatsAndMl -eq 'Python' -or $StatsAndMl -eq 'Python and R'){
+        (Get-Content -Path $configini).Replace('IACCEPTPYTHONLICENSETERMS="False"', 'IACCEPTPYTHONLICENSETERMS="True"')| Out-File $configini
+    }
+    If($StatsAndMl -eq 'R' -or $StatsAndMl -eq 'Python and R'){
+        (Get-Content -Path $configini).Replace('IACCEPTROPENLICENSETERMS="False"', 'IACCEPTROPENLICENSETERMS="True"')| Out-File $configini
+    }
+    
     if ($SaveFile -eq "Yes") {
         $SaveFileLocation = Read-Host "Please enter your preferred directory for saving a copy of the configuration file: "
         Copy-Item $configini -Destination $SaveFileLocation
